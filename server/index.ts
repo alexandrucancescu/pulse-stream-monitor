@@ -67,6 +67,29 @@ function parseInput(body: unknown): StationInput | { error: string } {
   return { name, url, paths }
 }
 
+// Discover a Pulse instance's mounts via its /api/discovery endpoint,
+// server-side (no CORS). The UI turns the result into a station.
+app.post('/api/discover', { preHandler: requireAuth }, async (req, reply) => {
+  const base = String((req.body as { url?: string })?.url ?? '')
+    .trim()
+    .replace(/\/+$/, '')
+  if (!/^https?:\/\//.test(base)) {
+    return reply.code(400).send({ error: 'URL must start with http:// or https://' })
+  }
+  let data: { station?: unknown; streams?: unknown }
+  try {
+    const res = await fetch(`${base}/api/discovery`, { signal: AbortSignal.timeout(8000) })
+    if (!res.ok) return reply.code(502).send({ error: `Discovery failed (HTTP ${res.status})` })
+    data = (await res.json()) as typeof data
+  } catch {
+    return reply.code(502).send({ error: 'Could not reach that Pulse instance' })
+  }
+  if (!data || !Array.isArray(data.streams)) {
+    return reply.code(502).send({ error: 'That does not look like a Pulse instance' })
+  }
+  return { url: base, station: data.station ?? null, streams: data.streams }
+})
+
 app.get('/api/stations', { preHandler: requireAuth }, async () =>
   stationStore.list().map((s) => ({ ...s, targets: manager.snapshot(s) })),
 )

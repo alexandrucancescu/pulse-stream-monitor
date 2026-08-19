@@ -3,6 +3,7 @@ import {
   api,
   fmtDuration,
   fmtRate,
+  type Discovery,
   type Heartbeat,
   type Incident,
   type State,
@@ -94,6 +95,7 @@ const Dashboard: Component<{ username: string; onLogout: () => void }> = (props)
 
       <main class="stack">
         <AddStation onAdded={refetch} />
+        <ImportPulse onAdded={refetch} />
         <Show
           when={(stations() ?? []).length > 0}
           fallback={<div class="muted center-pad">No streams yet — add one above.</div>}
@@ -153,6 +155,142 @@ const AddStation: Component<{ onAdded: () => void }> = (props) => {
             Cancel
           </button>
         </div>
+      </form>
+    </Show>
+  )
+}
+
+const ImportPulse: Component<{ onAdded: () => void }> = (props) => {
+  const [open, setOpen] = createSignal(false)
+  const [url, setUrl] = createSignal('')
+  const [disco, setDisco] = createSignal<Discovery | null>(null)
+  const [name, setName] = createSignal('')
+  const [selected, setSelected] = createSignal<Set<number>>(new Set())
+  const [err, setErr] = createSignal<string | null>(null)
+  const [busy, setBusy] = createSignal(false)
+
+  function reset() {
+    setOpen(false)
+    setUrl('')
+    setDisco(null)
+    setName('')
+    setSelected(new Set<number>())
+    setErr(null)
+  }
+
+  async function discover(e: Event) {
+    e.preventDefault()
+    setBusy(true)
+    setErr(null)
+    try {
+      const d = await api.discover(url())
+      setDisco(d)
+      setName(d.station?.name ?? '')
+      // Default-select the monitorable (http) mounts; leave HLS unchecked
+      setSelected(new Set<number>(d.streams.flatMap((s, i) => (s.type === 'http' ? [i] : []))))
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Discovery failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function toggle(i: number) {
+    const next = new Set(selected())
+    next.has(i) ? next.delete(i) : next.add(i)
+    setSelected(next)
+  }
+
+  async function importStation(e: Event) {
+    e.preventDefault()
+    const d = disco()!
+    const paths = d.streams
+      .filter((_, i) => selected().has(i))
+      .map((s) => s.aliases[0])
+      .filter(Boolean)
+    if (!name().trim() || paths.length === 0) {
+      setErr('Pick a name and at least one stream')
+      return
+    }
+    setBusy(true)
+    setErr(null)
+    try {
+      await api.createStation({ name: name().trim(), url: d.url, paths })
+      reset()
+      props.onAdded()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Import failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Show
+      when={open()}
+      fallback={
+        <button class="ghost" onClick={() => setOpen(true)}>
+          + Import from Pulse
+        </button>
+      }
+    >
+      <form class="card add" onSubmit={(e) => (disco() ? importStation(e) : discover(e))}>
+        <Show when={err()}>
+          <div class="error">{err()}</div>
+        </Show>
+        <Show
+          when={disco()}
+          fallback={
+            <>
+              <input
+                placeholder="Pulse URL (https://live.superfm.ro)"
+                value={url()}
+                onInput={(e) => setUrl(e.currentTarget.value)}
+                autofocus
+              />
+              <div class="row">
+                <button class="primary" disabled={busy() || !url()}>
+                  {busy() ? 'Discovering…' : 'Discover'}
+                </button>
+                <button type="button" class="ghost" onClick={reset}>
+                  Cancel
+                </button>
+              </div>
+            </>
+          }
+        >
+          <input placeholder="Station name" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
+          <div class="muted small section-label">Streams · pick which to monitor</div>
+          <div class="stack import-list">
+            <For each={disco()!.streams}>
+              {(s, i) => (
+                <label class="import-row">
+                  <input
+                    type="checkbox"
+                    checked={selected().has(i())}
+                    disabled={s.type === 'hls'}
+                    onChange={() => toggle(i())}
+                  />
+                  <span class="mono grow">{s.aliases[0]}</span>
+                  <span class="muted small">
+                    {s.format.toUpperCase()}
+                    {s.bitrate ? ` ${s.bitrate}k` : ''}
+                    {s.channels === 1 ? ' · mono' : s.channels === 2 ? ' · stereo' : ''}
+                    <Show when={s.type === 'hls'}> · HLS (not monitored)</Show>
+                  </span>
+                </label>
+              )}
+            </For>
+          </div>
+          <div class="row">
+            <button class="primary" disabled={busy()}>
+              Import selected
+            </button>
+            <button type="button" class="ghost" onClick={reset}>
+              Cancel
+            </button>
+          </div>
+        </Show>
       </form>
     </Show>
   )

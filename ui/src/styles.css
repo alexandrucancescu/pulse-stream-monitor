@@ -83,6 +83,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .pill.muted-pill { background: rgba(255, 255, 255, 0.06); color: var(--faint); }
 
+.import-list { gap: 6px; margin-top: 2px; }
+.import-row { display: flex; align-items: center; gap: 10px; font-size: 13px; cursor: pointer; }
+.import-row input[type='checkbox'] { flex: none; }
+
 .strip-row { display: flex; align-items: center; gap: 10px; }
 .strip-path { color: var(--muted); width: 92px; flex: none; text-align: right; }
 .strip { display: flex; gap: 1px; height: 20px; border-radius: 4px; overflow: hidden; flex: 1; background: rgba(255, 255, 255, 0.03); }

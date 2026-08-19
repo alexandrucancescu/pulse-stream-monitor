@@ -38,6 +38,22 @@ export type History = {
   heartbeats: Heartbeat[]
 }
 
+export type DiscoveredStream = {
+  name: string
+  type: 'http' | 'hls'
+  format: string
+  bitrate: number | null
+  channels: number | null
+  aliases: string[]
+  active?: boolean
+}
+
+export type Discovery = {
+  url: string
+  station: { name: string; description?: string } | null
+  streams: DiscoveredStream[]
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null
@@ -66,6 +82,15 @@ export const api = {
   },
   async stations(): Promise<Station[]> {
     return json(await fetch('/api/stations'))
+  },
+  async discover(url: string): Promise<Discovery> {
+    return json(
+      await fetch('/api/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      }),
+    )
   },
   async createStation(input: { name: string; url: string; paths: string[] }): Promise<Station> {
     return json(
