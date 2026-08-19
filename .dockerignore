@@ -1,0 +1,11 @@
+node_modules
+dist
+data
+*.db
+*.db-*
+.git
+.env
+.DS_Store
+.idea
+.vscode
+.claude
