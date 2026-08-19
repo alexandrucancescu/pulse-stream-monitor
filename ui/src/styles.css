@@ -68,6 +68,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .dot.down { background: var(--down); box-shadow: 0 0 8px -1px var(--down); }
 
 .station-head { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+.caret { flex: none; user-select: none; }
+.station-head:hover .caret { color: var(--ink); }
 .station-name { font-weight: 600; }
 .targets { display: flex; flex-direction: column; gap: 7px; margin-top: 14px; }
 .target { display: flex; align-items: center; gap: 10px; font-size: 13px; }

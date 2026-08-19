@@ -1,4 +1,5 @@
 import { createResource, createSignal, For, onCleanup, Show, type Component } from 'solid-js'
+import { createStore, reconcile } from 'solid-js/store'
 import {
   api,
   fmtDuration,
@@ -70,9 +71,23 @@ const Login: Component<{ onDone: () => void }> = (props) => {
 }
 
 const Dashboard: Component<{ username: string; onLogout: () => void }> = (props) => {
-  const [stations, { refetch }] = createResource(api.stations)
-  const timer = setInterval(refetch, 3000)
+  // A store + reconcile(key:'id') keeps each station's identity stable across
+  // the 3s poll, so expanded cards stay open and pills update in place —
+  // rather than <For> recreating every card (which reset the expand state).
+  const [stations, setStations] = createStore<Station[]>([])
+  const [loaded, setLoaded] = createSignal(false)
+
+  async function load() {
+    try {
+      setStations(reconcile(await api.stations(), { key: 'id' }))
+      setLoaded(true)
+    } catch {
+      /* keep the last good data on a transient error */
+    }
+  }
+  const timer = setInterval(load, 3000)
   onCleanup(() => clearInterval(timer))
+  void load()
 
   async function logout() {
     await api.logout()
@@ -94,13 +109,17 @@ const Dashboard: Component<{ username: string; onLogout: () => void }> = (props)
       </header>
 
       <main class="stack">
-        <AddStation onAdded={refetch} />
-        <ImportPulse onAdded={refetch} />
+        <AddStation onAdded={load} />
+        <ImportPulse onAdded={load} />
         <Show
-          when={(stations() ?? []).length > 0}
-          fallback={<div class="muted center-pad">No streams yet — add one above.</div>}
+          when={stations.length > 0}
+          fallback={
+            <div class="muted center-pad">
+              {loaded() ? 'No streams yet — add one above.' : 'Loading…'}
+            </div>
+          }
         >
-          <For each={stations()}>{(s) => <StationCard station={s} onChanged={refetch} />}</For>
+          <For each={stations}>{(s) => <StationCard station={s} onChanged={load} />}</For>
         </Show>
       </main>
     </div>
@@ -321,6 +340,7 @@ const StationCard: Component<{ station: Station; onChanged: () => void }> = (pro
           <div class="station-name">{props.station.name}</div>
           <div class="muted small mono">{props.station.url}</div>
         </div>
+        <span class="caret muted small">{expanded() ? 'Hide ▾' : 'History ▸'}</span>
         <button class="ghost small" onClick={(e) => (e.stopPropagation(), remove())}>
           Remove
         </button>
@@ -338,9 +358,9 @@ const StationCard: Component<{ station: Station; onChanged: () => void }> = (pro
                 when={t.monitored}
                 fallback={<span class="muted small">not monitored</span>}
               >
-                <span class="muted small mono">
+                <span class="muted small mono" title="current throughput · target bitrate">
                   {fmtRate(t.rate)}
-                  <Show when={t.expected}> / {fmtRate(t.expected)}</Show>
+                  <Show when={t.expected}> · target {fmtRate(t.expected)}</Show>
                 </span>
               </Show>
             </div>

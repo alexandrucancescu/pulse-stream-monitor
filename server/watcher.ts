@@ -13,7 +13,8 @@ const key = (stationId: number, path: string) => `${stationId}::${path}`
 class TargetWatcher {
   state: State = 'down'
   rate: number | null = null
-  expected: number | null = null // learned baseline bytes/sec
+  expected: number | null = null // baseline bytes/sec (icy-br or learned)
+  private expectedLocked = false // true when the baseline came from icy-br
   since = Date.now()
 
   private stopped = false
@@ -67,11 +68,18 @@ class TargetWatcher {
         })
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
 
-        // Authoritative baseline from ICY bitrate when the server sends it
-        const icyBr = Number(res.headers.get('icy-br'))
-        if (icyBr > 0) this.expected = (icyBr * 1000) / 8
-
+        // Fresh baseline each connection (so a bitrate change in the source,
+        // which drops + reconnects the stream, is re-learned cleanly).
         this.onConnected()
+
+        // Authoritative nominal from ICY bitrate when the server sends it;
+        // locked so VBR peaks can't drag the baseline up (which would make
+        // the average look "slow").
+        const icyBr = Number(res.headers.get('icy-br'))
+        if (icyBr > 0) {
+          this.expected = (icyBr * 1000) / 8
+          this.expectedLocked = true
+        }
         const reader = res.body.getReader()
         while (!this.stopped) {
           const { done, value } = await reader.read()
@@ -100,6 +108,8 @@ class TargetWatcher {
     this.lastByteAt = Date.now()
     this.failures = 0
     this.log = []
+    this.expected = null
+    this.expectedLocked = false
   }
 
   private onDisconnected() {
@@ -141,9 +151,12 @@ class TargetWatcher {
       } else if (inWarmup) {
         next = 'flowing'
       } else {
-        // Learn the baseline as the running max of the healthy rate (CBR
-        // streams push at ~constant bitrate; a slow spell won't raise it)
-        if (!this.expected || rate > this.expected) this.expected = rate
+        // With no icy-br to lock onto, learn the baseline as the running max
+        // of the (30s-averaged) rate. The wide window means VBR is already
+        // smoothed, so the max ≈ the true bitrate rather than a peak.
+        if (!this.expectedLocked && (!this.expected || rate > this.expected)) {
+          this.expected = rate
+        }
         next = this.expected && rate < this.expected * tune.slowRatio ? 'slow' : 'flowing'
       }
     }
