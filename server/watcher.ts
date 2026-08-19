@@ -1,20 +1,21 @@
 import { config, watcher as tune } from './config'
 import { heartbeats, incidents, stations as stationStore } from './db'
+import { createAudioClock, type AudioClock } from './audioClock'
 import type { State, Station, TargetStatus } from './types'
 
 const isHls = (path: string) => /\.m3u8($|\?)|\/hls\b/i.test(path)
 const key = (stationId: number, path: string) => `${stationId}::${path}`
 
 /**
- * Watches ONE stream path: connects like a listener, tracks the byte rate,
- * and classifies flow as flowing / slow / stalled / down. Persists incidents
- * on state change; the manager samples state into heartbeats on a timer.
+ * Watches ONE stream path: connects like a listener, parses the audio to
+ * count delivered audio-time vs wall-clock, and classifies flow as
+ * flowing / slow / stalled / down. Persists incidents on state change; the
+ * manager samples state into heartbeats on a timer.
  */
 class TargetWatcher {
   state: State = 'down'
-  rate: number | null = null
-  expected: number | null = null // baseline bytes/sec (icy-br or learned)
-  private expectedLocked = false // true when the baseline came from icy-br
+  rate: number | null = null // bytes/sec, for the kbps readout
+  realtime: number | null = null // delivered audio-seconds ÷ wall-seconds
   since = Date.now()
 
   private stopped = false
@@ -23,7 +24,9 @@ class TargetWatcher {
   private lastByteAt = 0
   private failures = 0
   private controller: AbortController | null = null
-  private log: { t: number; n: number }[] = []
+  private clock: AudioClock | null = null
+  private byteLog: { t: number; n: number }[] = []
+  private audioLog: { t: number; a: number }[] = []
   private timer: ReturnType<typeof setInterval> | null = null
 
   constructor(
@@ -52,7 +55,7 @@ class TargetWatcher {
       url: this.url,
       state: this.state,
       rate: this.rate,
-      expected: this.expected,
+      realtime: this.realtime,
       since: this.since,
       monitored: true,
     }
@@ -68,23 +71,17 @@ class TargetWatcher {
         })
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
 
-        // Fresh baseline each connection (so a bitrate change in the source,
-        // which drops + reconnects the stream, is re-learned cleanly).
         this.onConnected()
+        // Pick the audio-time parser from the content type (path as fallback)
+        this.clock = createAudioClock(res.headers.get('content-type'), this.path)
 
-        // Authoritative nominal from ICY bitrate when the server sends it;
-        // locked so VBR peaks can't drag the baseline up (which would make
-        // the average look "slow").
-        const icyBr = Number(res.headers.get('icy-br'))
-        if (icyBr > 0) {
-          this.expected = (icyBr * 1000) / 8
-          this.expectedLocked = true
-        }
         const reader = res.body.getReader()
         while (!this.stopped) {
           const { done, value } = await reader.read()
           if (done) break
-          if (value) this.onBytes(value.length)
+          if (value) {
+            this.onBytes(Buffer.from(value.buffer, value.byteOffset, value.byteLength))
+          }
         }
         // Clean end of stream = the server closed on us
         this.onDisconnected()
@@ -107,30 +104,43 @@ class TargetWatcher {
     this.connectedAt = Date.now()
     this.lastByteAt = Date.now()
     this.failures = 0
-    this.log = []
-    this.expected = null
-    this.expectedLocked = false
+    this.byteLog = []
+    this.audioLog = []
+    this.clock = null
+    this.realtime = null
   }
 
   private onDisconnected() {
     this.connected = false
   }
 
-  private onBytes(n: number) {
-    const now = Date.now()
-    this.lastByteAt = now
-    this.log.push({ t: now, n })
+  private onBytes(chunk: Buffer) {
+    this.lastByteAt = Date.now()
+    this.byteLog.push({ t: this.lastByteAt, n: chunk.length })
+    this.clock?.feed(chunk)
   }
 
-  /** Current bytes/sec over the rolling window. */
-  private currentRate(now: number): number {
+  /** Current bytes/sec over the rolling window (for the kbps readout). */
+  private currentByteRate(now: number): number {
     const windowMs = tune.windowSeconds * 1000
     const from = now - windowMs
-    this.log = this.log.filter((e) => e.t >= from)
-    const bytes = this.log.reduce((s, e) => s + e.n, 0)
+    this.byteLog = this.byteLog.filter((e) => e.t >= from)
+    const bytes = this.byteLog.reduce((s, e) => s + e.n, 0)
     const spanMs = Math.min(now - this.connectedAt, windowMs)
     if (spanMs <= 0) return 0
     return bytes / (spanMs / 1000)
+  }
+
+  /** Delivered audio-seconds ÷ wall-seconds over the window (~1.0 = healthy). */
+  private computeRealtime(now: number): number | null {
+    const from = now - tune.windowSeconds * 1000
+    this.audioLog = this.audioLog.filter((e) => e.t >= from)
+    if (this.audioLog.length < 2) return null
+    const first = this.audioLog[0]
+    const last = this.audioLog[this.audioLog.length - 1]
+    const wall = (last.t - first.t) / 1000
+    if (wall < 5) return null // not enough span to judge yet
+    return (last.a - first.a) / wall
   }
 
   private evaluate() {
@@ -141,23 +151,25 @@ class TargetWatcher {
     if (!this.connected) {
       next = 'down'
       this.rate = null
+      this.realtime = null
     } else {
-      const rate = this.currentRate(now)
-      this.rate = rate
+      this.rate = this.currentByteRate(now)
+      if (this.clock) {
+        this.audioLog.push({ t: now, a: this.clock.audioSeconds() })
+        this.realtime = this.computeRealtime(now)
+      }
       const inWarmup = now - this.connectedAt < tune.warmupSeconds * 1000
 
       if (now - this.lastByteAt > tune.stallSeconds * 1000) {
         next = 'stalled'
       } else if (inWarmup) {
         next = 'flowing'
+      } else if (this.realtime != null && this.realtime < tune.slowRatio) {
+        // Delivering audio slower than realtime → listener buffers drain.
+        // Measured on audio-time, so it's correct for VBR (Opus) too.
+        next = 'slow'
       } else {
-        // With no icy-br to lock onto, learn the baseline as the running max
-        // of the (30s-averaged) rate. The wide window means VBR is already
-        // smoothed, so the max ≈ the true bitrate rather than a peak.
-        if (!this.expectedLocked && (!this.expected || rate > this.expected)) {
-          this.expected = rate
-        }
-        next = this.expected && rate < this.expected * tune.slowRatio ? 'slow' : 'flowing'
+        next = 'flowing'
       }
     }
 
@@ -177,8 +189,8 @@ class TargetWatcher {
   }
 
   private detail(state: State): string {
-    if (state === 'slow' && this.rate != null && this.expected) {
-      return `${Math.round((this.rate / this.expected) * 100)}% of realtime`
+    if (state === 'slow' && this.realtime != null) {
+      return `${Math.round(this.realtime * 100)}% of realtime`
     }
     return ''
   }
@@ -227,7 +239,7 @@ class WatcherManager {
     return station.paths.map((path) => {
       const url = `${station.url}${path}`
       if (isHls(path)) {
-        return { path, url, state: 'flowing', rate: null, expected: null, since: 0, monitored: false }
+        return { path, url, state: 'flowing', rate: null, realtime: null, since: 0, monitored: false }
       }
       const w = this.watchers.get(key(station.id, path))
       return (
@@ -236,7 +248,7 @@ class WatcherManager {
           url,
           state: 'down',
           rate: null,
-          expected: null,
+          realtime: null,
           since: 0,
           monitored: true,
         }

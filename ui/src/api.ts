@@ -5,7 +5,8 @@ export type Target = {
   url: string
   state: State
   rate: number | null
-  expected: number | null
+  /** delivered audio-seconds ÷ wall-seconds (~1.0 = keeping pace) */
+  realtime: number | null
   since: number
   monitored: boolean
 }
@@ -113,6 +114,10 @@ export function fmtRate(bytesPerSec: number | null): string {
   if (bytesPerSec == null) return '—'
   const kbps = (bytesPerSec * 8) / 1000
   return kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${Math.round(kbps)} kbps`
+}
+
+export function fmtRealtime(r: number | null): string {
+  return r == null ? '—' : `${r.toFixed(2)}×`
 }
 
 export function fmtDuration(ms: number): string {

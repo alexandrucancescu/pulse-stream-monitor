@@ -4,6 +4,7 @@ import {
   api,
   fmtDuration,
   fmtRate,
+  fmtRealtime,
   type Discovery,
   type Heartbeat,
   type Incident,
@@ -358,9 +359,12 @@ const StationCard: Component<{ station: Station; onChanged: () => void }> = (pro
                 when={t.monitored}
                 fallback={<span class="muted small">not monitored</span>}
               >
-                <span class="muted small mono" title="current throughput · target bitrate">
-                  {fmtRate(t.rate)}
-                  <Show when={t.expected}> · target {fmtRate(t.expected)}</Show>
+                <span class="muted small mono" title="delivered audio ÷ realtime · throughput">
+                  <Show when={t.realtime != null} fallback={fmtRate(t.rate)}>
+                    <span class={t.realtime! < 0.9 ? 'text-slow' : ''}>{fmtRealtime(t.realtime)}</span>
+                    {' · '}
+                    {fmtRate(t.rate)}
+                  </Show>
                 </span>
               </Show>
             </div>

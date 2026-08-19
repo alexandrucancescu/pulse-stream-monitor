@@ -35,16 +35,14 @@ export const config = {
 
 // ── Watcher tuning (fixed; sane for internet radio) ──────────────────
 export const watcher = {
-  // Rolling window over which the current byte rate is measured. Wide
-  // enough that VBR streams (Opus especially) average out instead of
-  // tripping "slow" on their natural rate swings.
-  windowSeconds: 30,
+  // Rolling window over which the realtime ratio + byte rate are measured.
+  windowSeconds: 20,
   // No bytes for this long while connected → stalled.
   stallSeconds: 8,
-  // Sustained rate below this fraction of the baseline → slow.
-  slowRatio: 0.85,
-  // Ignore the first moments of a connection while the baseline settles.
-  warmupSeconds: 30,
+  // Delivered-audio ÷ wall-clock below this → slow (falling behind realtime).
+  slowRatio: 0.9,
+  // Ignore the first moments of a connection (icecast burst, window fill).
+  warmupSeconds: 15,
   // Reconnect backoff after a drop.
   reconnectBaseMs: 2000,
   reconnectMaxMs: 30_000,

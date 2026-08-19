@@ -43,10 +43,11 @@ export type TargetStatus = {
   path: string
   url: string
   state: State
-  /** Current measured bytes/sec, null until the baseline is learned. */
+  /** Current throughput in bytes/sec (for the kbps readout), or null. */
   rate: number | null
-  /** Learned baseline bytes/sec, null during warmup. */
-  expected: number | null
+  /** Seconds of audio delivered ÷ seconds of wall-clock (~1.0 = keeping
+   *  pace). null during warmup or when the format can't be parsed. */
+  realtime: number | null
   since: number
   /** False for HLS paths — not watched (byte-rate doesn't apply). */
   monitored: boolean
