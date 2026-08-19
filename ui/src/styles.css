@@ -44,11 +44,12 @@ button, input { font-family: inherit; font-size: 14px; }
 .card { background: var(--card); border: 1px solid var(--hair); border-radius: 14px; padding: 16px; }
 .login, .add { display: flex; flex-direction: column; gap: 12px; width: min(340px, 100%); }
 
-input {
+input:not([type='checkbox']):not([type='radio']) {
   background: var(--card-2); border: 1px solid var(--hair); color: var(--ink);
   border-radius: 9px; padding: 10px 12px; outline: none; width: 100%;
 }
-input:focus { border-color: var(--faint); }
+input:not([type='checkbox']):not([type='radio']):focus { border-color: var(--faint); }
+input[type='checkbox'] { width: auto; flex: none; accent-color: var(--flowing); }
 
 button { border-radius: 9px; padding: 9px 15px; cursor: pointer; border: 1px solid transparent; }
 button.primary { background: var(--accent); color: #fff; font-weight: 600; }
